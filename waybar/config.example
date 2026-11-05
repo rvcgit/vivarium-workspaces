@@ -1,0 +1,98 @@
+{
+    "layer": "top",
+    "position": "top",
+    "spacing": 5,
+
+    "modules-left": [
+        "custom/ws1",
+        "custom/ws2",
+        "custom/ws3",
+        "custom/ws4",
+        "custom/ws5",
+        "custom/ws6",
+        "custom/ws7",
+        "custom/ws8",
+        "custom/ws9"
+    ],
+
+    "custom/ws1": {
+        "exec": "~/.config/waybar/scripts/vivarium-workspace-item.sh 1",
+        "return-type": "json",
+        "format": "{}",
+        "interval": 1,
+        "escape": false,
+        "on-click": "ydotool key 125:1 2:1 2:0 125:0"
+    },
+
+    "custom/ws2": {
+        "exec": "~/.config/waybar/scripts/vivarium-workspace-item.sh 2",
+        "return-type": "json",
+        "format": "{}",
+        "interval": 1,
+        "escape": false,
+        "on-click": "ydotool key 125:1 3:1 3:0 125:0"
+    },
+
+    "custom/ws3": {
+        "exec": "~/.config/waybar/scripts/vivarium-workspace-item.sh 3",
+        "return-type": "json",
+        "format": "{}",
+        "interval": 1,
+        "escape": false,
+        "on-click": "ydotool key 125:1 4:1 4:0 125:0"
+    },
+
+    "custom/ws4": {
+        "exec": "~/.config/waybar/scripts/vivarium-workspace-item.sh 4",
+        "return-type": "json",
+        "format": "{}",
+        "interval": 1,
+        "escape": false,
+        "on-click": "ydotool key 125:1 5:1 5:0 125:0"
+    },
+
+    "custom/ws5": {
+        "exec": "~/.config/waybar/scripts/vivarium-workspace-item.sh 5",
+        "return-type": "json",
+        "format": "{}",
+        "interval": 1,
+        "escape": false,
+        "on-click": "ydotool key 125:1 6:1 6:0 125:0"
+    },
+
+    "custom/ws6": {
+        "exec": "~/.config/waybar/scripts/vivarium-workspace-item.sh 6",
+        "return-type": "json",
+        "format": "{}",
+        "interval": 1,
+        "escape": false,
+        "on-click": "ydotool key 125:1 7:1 7:0 125:0"
+    },
+
+    "custom/ws7": {
+        "exec": "~/.config/waybar/scripts/vivarium-workspace-item.sh 7",
+        "return-type": "json",
+        "format": "{}",
+        "interval": 1,
+        "escape": false,
+        "on-click": "ydotool key 125:1 8:1 8:0 125:0"
+    },
+
+    "custom/ws8": {
+        "exec": "~/.config/waybar/scripts/vivarium-workspace-item.sh 8",
+        "return-type": "json",
+        "format": "{}",
+        "interval": 1,
+        "escape": false,
+        "on-click": "ydotool key 125:1 9:1 9:0 125:0"
+    },
+
+    "custom/ws9": {
+        "exec": "~/.config/waybar/scripts/vivarium-workspace-item.sh 9",
+        "return-type": "json",
+        "format": "{}",
+        "interval": 1,
+        "escape": false,
+        "on-click": "ydotool key 125:1 10:1 10:0 125:0"
+    }
+}

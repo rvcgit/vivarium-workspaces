@@ -1,0 +1,176 @@
+diff --git a/src/viv_ipc.c b/src/viv_ipc.c
+index b3c69c2..63473fe 100644
+--- a/src/viv_ipc.c
++++ b/src/viv_ipc.c
+@@ -1,62 +1,153 @@
+ #include <signal.h>
+ #include <stdio.h>
++#include <stdint.h>
++#include <stdbool.h>
+ 
+ #include <wayland-util.h>
+ #include <wlr/util/log.h>
+ 
+ #include "viv_types.h"
+ 
+-static void write_workspaces_file(char *output_filen, struct wl_list *workspaces, struct viv_output *active_output) {
++/*
++ * Calculate a signature from workspace names and window counts.
++ * Detects occupancy changes without writing on every rendered frame.
++ */
++static uint64_t workspace_occupancy_signature(struct wl_list *workspaces) {
++    uint64_t hash = 14695981039346656037ULL;
++
++    struct viv_workspace *workspace;
++
++    wl_list_for_each(workspace, workspaces, server_link) {
++        const unsigned char *p = (const unsigned char *)workspace->name;
++
++        while (*p) {
++            hash ^= *p++;
++            hash *= 1099511628211ULL;
++        }
++
++        uint64_t count = (uint64_t)wl_list_length(&workspace->views);
++
++        for (int i = 0; i < 8; i++) {
++            hash ^= (count >> (i * 8)) & 0xFF;
++            hash *= 1099511628211ULL;
++        }
++    }
++
++    return hash;
++}
++
++/*
++ * Write workspace state.
++ * Returns true only when the complete file write succeeds.
++ */
++static bool write_workspaces_file(
++    char *output_filen,
++    struct wl_list *workspaces,
++    struct viv_output *active_output
++) {
+     FILE *handle = fopen(output_filen, "w");
++
+     if (handle == NULL) {
+         wlr_log(WLR_ERROR, "Error opening file \"%s\", skipping", output_filen);
+-        return;
++        return false;
+     }
+ 
+-    fprintf(handle, " ");
++    bool success = true;
++
++    if (fprintf(handle, " ") < 0) {
++        success = false;
++    }
+ 
+     struct viv_workspace *workspace;
++
+     wl_list_for_each(workspace, workspaces, server_link) {
++        bool occupied = wl_list_length(&workspace->views) > 0;
++        const char *marker = occupied ? "*" : "";
++
++        int result;
++
+         if (workspace->output == NULL) {
+-            fprintf(handle, "%s ", workspace->name);
++            result = fprintf(handle, "%s%s ", workspace->name, marker);
+         } else if (workspace->output == active_output) {
+-            fprintf(handle, "<%s> ", workspace->name);
++            result = fprintf(handle, "<%s>%s ", workspace->name, marker);
+         } else {
+-            fprintf(handle, "[%s] ", workspace->name);
++            result = fprintf(handle, "[%s]%s ", workspace->name, marker);
++        }
++
++        if (result < 0) {
++            success = false;
++            break;
+         }
+     }
+ 
+-    fprintf(handle, "\n");
++    if (success && fprintf(handle, "\n") < 0) {
++        success = false;
++    }
+ 
+-    fclose(handle);
+-}
++    if (fclose(handle) != 0) {
++        success = false;
++    }
++
++    if (!success) {
++        wlr_log(WLR_ERROR, "Error writing workspace file \"%s\"", output_filen);
++    }
+ 
++    return success;
++}
+ 
+ void viv_routine_log_state(struct viv_server *server) {
+     char *output_filen = server->config->ipc_workspaces_filename;
++
+     if (output_filen == NULL) {
+-        // No output file configured, so just do nothing
+         return;
+     }
+ 
+     if (!server->active_output) {
+-        // Don't try to log anything, we aren't expecting anything to really change
+         return;
+     }
+ 
+-    if ((server->log_state.last_active_output == server->active_output) &&
+-        (server->log_state.last_active_workspace == server->active_output->current_workspace)) {
+-        // Nothing loggable has changed
++    static uint64_t last_occupancy_signature = 0;
++    static bool have_last_occupancy_signature = false;
++
++    uint64_t current_signature =
++        workspace_occupancy_signature(&server->workspaces);
++
++    bool active_state_changed =
++        server->log_state.last_active_output != server->active_output ||
++        server->log_state.last_active_workspace !=
++            server->active_output->current_workspace;
++
++    bool occupancy_changed =
++        !have_last_occupancy_signature ||
++        current_signature != last_occupancy_signature;
++
++    if (!active_state_changed && !occupancy_changed) {
++        return;
++    }
++
++    /*
++     * Update remembered state only after a successful file write.
++     * This allows a later call to retry if writing fails.
++     */
++    if (!write_workspaces_file(
++            output_filen,
++            &server->workspaces,
++            server->active_output
++        )) {
+         return;
+     }
+ 
+     server->log_state.last_active_output = server->active_output;
+-    server->log_state.last_active_workspace = server->active_output->current_workspace;
++    server->log_state.last_active_workspace =
++        server->active_output->current_workspace;
+ 
+-    write_workspaces_file(output_filen, &server->workspaces, server->active_output);
++    last_occupancy_signature = current_signature;
++    have_last_occupancy_signature = true;
+ 
+-    // If configured, send a signal to the bar program to let it know it should update
+     if (server->bar_pid && server->config->bar.update_signal_number) {
+-        kill(server->bar_pid, SIGRTMIN + (int)server->config->bar.update_signal_number);
++        kill(
++            server->bar_pid,
++            SIGRTMIN + (int)server->config->bar.update_signal_number
++        );
+     }
+ }
