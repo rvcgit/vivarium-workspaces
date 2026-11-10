@@ -1,0 +1,477 @@
+diff --git a/include/viv_server.h b/include/viv_server.h
+index e5a81c4..98d0669 100644
+--- a/include/viv_server.h
++++ b/include/viv_server.h
+@@ -23,6 +23,8 @@ struct viv_layer_view *viv_server_layer_view_at(
+ 
+ 
+ struct viv_workspace *viv_server_retrieve_workspace_by_name(struct viv_server *server, char *name);
++/// Apply an application-to-workspace placement rule to a view
++void viv_server_apply_window_rule(struct viv_view *view);
+ 
+ /// Check through all data held by the server to check for consistency, e.g. all
+ /// view->workspace is equal to the workspace of their workspace_link. This is intended
+diff --git a/include/viv_types.h b/include/viv_types.h
+index bf6463e..aa4cbf7 100644
+--- a/include/viv_types.h
++++ b/include/viv_types.h
+@@ -192,6 +192,7 @@ struct viv_view_implementation {
+     void (*get_geometry)(struct viv_view *view, struct wlr_box *geo_box);
+     void (*set_tiled)(struct viv_view *view, uint32_t edges);
+     void (*get_string_identifier)(struct viv_view *view, char *output, size_t max_len);
++    const char *(*get_app_id)(struct viv_view *view);
+     struct wlr_surface *(*get_toplevel_surface)(struct viv_view *view);
+     void (*close)(struct viv_view *view);
+     bool (*is_at)(struct viv_view *view, double lx, double ly, struct wlr_surface **surface, double *sx, double *sy);
+@@ -298,6 +299,11 @@ struct viv_keyboard {
+ 	struct wl_listener key;
+ };
+ 
++struct viv_window_rule {
++    char *app_id;
++    unsigned int workspace_number;
++};
++
+ struct viv_config {
+     enum wlr_keyboard_modifier global_meta_key;
+ 
+@@ -340,11 +346,10 @@ struct viv_config {
+     struct viv_keybind *keybinds;
+ 
+     struct viv_layout *layouts;
+-
+     struct viv_libinput_config *libinput_configs;
+-
++    struct viv_window_rule *window_rules;
++    size_t window_rule_count;
+     enum viv_damage_tracking_mode damage_tracking_mode;
+-
+     bool debug_mark_views_by_shell;
+     bool debug_mark_active_output;
+     bool debug_mark_frame_draws;
+diff --git a/include/viv_view.h b/include/viv_view.h
+index 10af971..80f9108 100644
+--- a/include/viv_view.h
++++ b/include/viv_view.h
+@@ -40,6 +40,9 @@ void viv_view_request_close(struct viv_view *view);
+ /// Return a string identifying the view type, as reported by the running application
+ void viv_view_get_string_identifier(struct viv_view *view, char *buffer, size_t len);
+ 
++/// Return the application identifier (XDG app_id or XWayland class)
++const char *viv_view_get_app_id(struct viv_view *view);
++
+ /// True if the surface geometry size exceeds that of the target draw region, else false
+ bool viv_view_oversized(struct viv_view *view);
+ 
+diff --git a/src/viv_server.c b/src/viv_server.c
+index dfba3d3..f1c1e73 100644
+--- a/src/viv_server.c
++++ b/src/viv_server.c
+@@ -2,6 +2,8 @@
+ #include <stdbool.h>
+ #include <stdlib.h>
+ #include <stdio.h>
++#include <ctype.h>
++#include <string.h>
+ #include <time.h>
+ #include <unistd.h>
+ #include <wayland-server-core.h>
+@@ -98,6 +100,60 @@ struct viv_workspace *viv_server_retrieve_workspace_by_name(struct viv_server *s
+     return NULL;
+ }
+ 
++void viv_server_apply_window_rule(struct viv_view *view) {
++    if (!view || !view->server || !view->server->config) {
++        return;
++    }
++
++    struct viv_config *config = view->server->config;
++
++    if (!config->window_rules || config->window_rule_count == 0) {
++        return;
++    }
++
++    const char *app_id = viv_view_get_app_id(view);
++    if (!app_id || app_id[0] == '\0') {
++        return;
++    }
++
++    for (size_t i = 0; i < config->window_rule_count; i++) {
++        struct viv_window_rule *rule = &config->window_rules[i];
++
++        if (!rule->app_id || strcmp(rule->app_id, app_id) != 0) {
++            continue;
++        }
++
++        if (rule->workspace_number < 1 ||
++            rule->workspace_number > MAX_NUM_WORKSPACES) {
++            wlr_log(WLR_ERROR,
++                "Window rule for \"%s\" has an invalid workspace number",
++                app_id);
++            return;
++        }
++
++        char *workspace_name =
++            config->workspaces[rule->workspace_number - 1];
++
++        struct viv_workspace *workspace =
++            viv_server_retrieve_workspace_by_name(view->server, workspace_name);
++
++        if (!workspace) {
++            wlr_log(WLR_ERROR,
++                "Window rule: workspace %u for application \"%s\" was not found",
++                rule->workspace_number, app_id);
++            return;
++        }
++
++        view->workspace = workspace;
++
++        wlr_log(WLR_INFO,
++            "Window rule: placing application \"%s\" on workspace %u",
++            app_id, rule->workspace_number);
++
++        return;
++    }
++}
++
+ struct viv_layer_view *viv_server_layer_view_at(
+ 		struct viv_server *server, double lx, double ly,
+ 		struct wlr_surface **surface, double *sx, double *sy,
+@@ -542,7 +598,214 @@ static char *get_default_config_path(void) {
+     return NULL;
+ }
+ 
++static char *get_active_config_path(char *user_path) {
++    if (user_path) {
++        return strdup(user_path);
++    }
++
++    return get_default_config_path();
++}
++
++static char *get_window_rules_path(const char *config_path) {
++    if (!config_path) {
++        return NULL;
++    }
++
++
++    const char *last_slash = strrchr(config_path, '/');
++
++    if (!last_slash) {
++        return strdup("window_rules.conf");
++    }
++
++    size_t directory_length = last_slash - config_path + 1;
++    const char filename[] = "window_rules.conf";
++
++    char *rules_path = malloc(directory_length + sizeof(filename));
++
++    if (!rules_path) {
++        return NULL;
++    }
++
++    memcpy(rules_path, config_path, directory_length);
++    memcpy(rules_path + directory_length, filename, sizeof(filename));
++
++    return rules_path;
++}
++
++static char *trim_whitespace(char *text) {
++    while (isspace((unsigned char)*text)) {
++        text++;
++    }
++
++    if (*text == '\0') {
++        return text;
++    }
++
++    char *end = text + strlen(text) - 1;
++
++    while (end > text && isspace((unsigned char)*end)) {
++        end--;
++    }
++
++    end[1] = '\0';
++
++    return text;
++}
++
++static void clear_window_rules(struct viv_config *config) {
++    for (size_t i = 0; i < config->window_rule_count; i++) {
++        free(config->window_rules[i].app_id);
++    }
++
++    free(config->window_rules);
++    config->window_rules = NULL;
++    config->window_rule_count = 0;
++}
++
++static void load_window_rules(struct viv_config *config, char *user_path) {
++    char *config_path = get_active_config_path(user_path);
++
++    if (!config_path) {
++        wlr_log(WLR_ERROR, "Could not determine config path for window rules");
++        return;
++    }
++
++    char *rules_path = get_window_rules_path(config_path);
++    free(config_path);
++
++    if (!rules_path) {
++        wlr_log(WLR_ERROR, "Could not allocate window rules path");
++        return;
++    }
++
++    FILE *file = fopen(rules_path, "r");
++
++    if (!file) {
++        wlr_log(WLR_DEBUG, "No window rules file found at \"%s\"", rules_path);
++        clear_window_rules(config);
++        free(rules_path);
++        return;
++    }
++
++    struct viv_window_rule *new_rules = NULL;
++    size_t new_rule_count = 0;
++
++    char *line = NULL;
++    size_t line_capacity = 0;
++    size_t line_number = 0;
++    bool allocation_failed = false;
++
++    while (getline(&line, &line_capacity, file) != -1) {
++        line_number++;
++
++        char *text = trim_whitespace(line);
++
++        if (*text == '\0' || *text == '#') {
++            continue;
++        }
++
++        char *separator = strchr(text, '=');
++
++        if (!separator || strchr(separator + 1, '=')) {
++            wlr_log(WLR_ERROR,
++                "Window rules: invalid syntax on line %zu",
++                line_number);
++            continue;
++        }
++
++        *separator = '\0';
++
++        char *app_id = trim_whitespace(text);
++        char *workspace_text = trim_whitespace(separator + 1);
++
++        if (*app_id == '\0' || *workspace_text == '\0') {
++            wlr_log(WLR_ERROR,
++                "Window rules: empty application or workspace on line %zu",
++                line_number);
++            continue;
++        }
++
++        char *number_end;
++        long workspace_number = strtol(workspace_text, &number_end, 10);
++
++        if (number_end == workspace_text || *number_end != '\0' ||
++            workspace_number < 1 ||
++            workspace_number > MAX_NUM_WORKSPACES) {
++            wlr_log(WLR_ERROR,
++                "Window rules: invalid workspace number on line %zu",
++                line_number);
++            continue;
++        }
++
++        if (config->workspaces[workspace_number - 1][0] == '\0') {
++            wlr_log(WLR_ERROR,
++                "Window rules: workspace %ld is not configured (line %zu)",
++                workspace_number, line_number);
++            continue;
++        }
++
++        char *app_id_copy = strdup(app_id);
++
++        if (!app_id_copy) {
++            allocation_failed = true;
++            break;
++        }
++
++        struct viv_window_rule *resized_rules = realloc(
++            new_rules,
++            (new_rule_count + 1) * sizeof(*new_rules)
++        );
++
++        if (!resized_rules) {
++            free(app_id_copy);
++            allocation_failed = true;
++            break;
++        }
++
++        new_rules = resized_rules;
++
++        new_rules[new_rule_count].app_id = app_id_copy;
++        new_rules[new_rule_count].workspace_number = workspace_number;
++
++        new_rule_count++;
++    }
++
++    if (ferror(file)) {
++        wlr_log(WLR_ERROR, "Error reading window rules file");
++        allocation_failed = true;
++    }
++
++    free(line);
++
++    if (fclose(file) != 0) {
++        wlr_log(WLR_ERROR, "Error closing window rules file");
++        allocation_failed = true;
++    }
++
++    free(rules_path);
++
++    if (allocation_failed) {
++        for (size_t i = 0; i < new_rule_count; i++) {
++            free(new_rules[i].app_id);
++        }
++
++        free(new_rules);
++
++        wlr_log(WLR_ERROR, "Could not load window rules; keeping previous rules");
++        return;
++    }
++
++    clear_window_rules(config);
++
++    config->window_rules = new_rules;
++    config->window_rule_count = new_rule_count;
++
++    wlr_log(WLR_INFO, "Loaded %zu application window rules", new_rule_count);
++}
++
+ void load_toml_config(struct viv_config *config, char *user_path) {
++    memset(config->workspaces, 0, sizeof(config->workspaces));
+     char *config_search_path = get_default_config_path();
+     if (user_path) {
+         viv_toml_config_load(user_path, config, true);
+@@ -556,7 +819,7 @@ void load_toml_config(struct viv_config *config, char *user_path) {
+ 
+ void viv_server_reload_config(struct viv_server *server) {
+     load_toml_config(server->config, server->user_provided_config_filen);
+-
++    load_window_rules(server->config, server->user_provided_config_filen);
+     struct viv_output *output;
+     wl_list_for_each(output, &server->outputs, link) {
+         viv_output_mark_for_relayout(output);
+@@ -631,6 +894,8 @@ void viv_server_init(struct viv_server *server) {
+     struct viv_config *config = &the_config;
+     // Load other config options from config.toml if possible
+     load_toml_config(config, server->user_provided_config_filen);
++    // Load application-to-workspace-rules
++    load_window_rules(config, server->user_provided_config_filen);
+     // Use the config, in whatever state it's ended up in
+     server->config = config;
+ 
+@@ -824,6 +1089,9 @@ void viv_server_update_idle_inhibitor_state(struct viv_server *server) {
+ 
+ void viv_server_deinit(struct viv_server *server) {
+     // Clean everything when shutting down
++    if (server->config) {
++        clear_window_rules(server->config);
++    }
+ #ifdef XWAYLAND
+     wlr_xwayland_destroy(server->xwayland_shell);
+ #endif
+diff --git a/src/viv_view.c b/src/viv_view.c
+index 08215b9..7a02a3d 100644
+--- a/src/viv_view.c
++++ b/src/viv_view.c
+@@ -170,6 +170,10 @@ void viv_view_get_string_identifier(struct viv_view *view, char *buffer, size_t
+     return view->implementation->get_string_identifier(view, buffer, len);
+ }
+ 
++const char *viv_view_get_app_id(struct viv_view *view) {
++    const char *app_id = view->implementation->get_app_id(view);
++    return app_id ? app_id : "";
++}
+ 
+ bool viv_view_oversized(struct viv_view *view) {
+     return view->implementation->oversized(view);
+diff --git a/src/viv_xdg_shell.c b/src/viv_xdg_shell.c
+index d2a5403..5fe34d9 100644
+--- a/src/viv_xdg_shell.c
++++ b/src/viv_xdg_shell.c
+@@ -65,6 +65,13 @@ static void xdg_surface_map(struct wl_listener *listener, void *data) {
+         }
+     }
+ 
++    // Apply application workspace rules to independent top-level windows.
++    // Explicit fullscreen-output requests take priority over application rules.
++    if (!view->xdg_surface->toplevel->parent &&
++        !(requested->fullscreen && requested->fullscreen_output)) {
++        viv_server_apply_window_rule(view);
++    }
++
+     // If this view is actually a child of some parent, which is the
+     // case for e.g. file dialogs, we should make it float instead of tiling
+     if (guess_should_be_floating(view)) {
+@@ -292,6 +299,10 @@ static void implementation_get_string_identifier(struct viv_view *view, char *ou
+              view->xdg_surface->toplevel->title);
+ }
+ 
++static const char *implementation_get_app_id(struct viv_view *view) {
++    return view->xdg_surface->toplevel->app_id;
++}
++
+ static struct wlr_surface *implementation_get_toplevel_surface(struct viv_view *view) {
+     return view->xdg_surface->surface;
+ }
+@@ -386,6 +397,7 @@ static struct viv_view_implementation xdg_view_implementation = {
+     .get_geometry = &implementation_get_geometry,
+     .set_tiled = &implementation_set_tiled,
+     .get_string_identifier = &implementation_get_string_identifier,
++    .get_app_id = &implementation_get_app_id,
+     .get_toplevel_surface = &implementation_get_toplevel_surface,
+     .close = &implementation_close,
+     .is_at = &implementation_is_at,
+diff --git a/src/viv_xwayland_shell.c b/src/viv_xwayland_shell.c
+index 521f28f..e457c96 100644
+--- a/src/viv_xwayland_shell.c
++++ b/src/viv_xwayland_shell.c
+@@ -209,7 +209,10 @@ static void event_xwayland_surface_map(struct wl_listener *listener, void *data)
+ 
+ 
+     wl_list_remove(&view->workspace_link);
+-
++    // Apply application workspace rules to independent top-level windows.
++    if (!surface->parent) {
++        viv_server_apply_window_rule(view);
++    }
+     viv_workspace_add_view(view->workspace, view);
+ 
+     if (view->server->config->allow_fullscreen) {
+@@ -230,7 +233,6 @@ static void event_xwayland_surface_unmap(struct wl_listener *listener, void *dat
+ 
+     wl_list_remove(&view->workspace_link);
+     wl_list_insert(&view->server->unmapped_views, &view->workspace_link);
+-
+     struct viv_workspace *workspace = view->workspace;
+     viv_workspace_mark_for_relayout(workspace);
+ 
+@@ -308,6 +310,10 @@ static void implementation_get_string_identifier(struct viv_view *view, char *ou
+              view->xwayland_surface->class);
+ }
+ 
++static const char *implementation_get_app_id(struct viv_view *view) {
++    return view->xwayland_surface->class;
++}
++
+ static struct wlr_surface *implementation_get_toplevel_surface(struct viv_view *view) {
+     return view->xwayland_surface->surface;
+ }
+@@ -396,6 +402,7 @@ static struct viv_view_implementation xwayland_view_implementation = {
+     .get_geometry = &implementation_get_geometry,
+     .set_tiled = &implementation_set_tiled,
+     .get_string_identifier = &implementation_get_string_identifier,
++    .get_app_id = &implementation_get_app_id,
+     .get_toplevel_surface = &implementation_get_toplevel_surface,
+     .close = &implementation_close,
+     .is_at = &implementation_is_at,

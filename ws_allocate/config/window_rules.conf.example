@@ -1,0 +1,19 @@
+# Native Wayland: XDG app_id
+# XWayland: WM_CLASS (second string)
+# Application = workspace number
+
+firefox         = 1
+org.gnome.gedit = 2
+terminator      = 3
+Alacritty       = 3
+sakura          = 3
+org.gnome.Terminal = 3
+URxvt           = 2
+tm              = 4
+pm              = 4
+pr              = 4
+virt-manager    = 5
+pcmanfm         = 6
+viewnior        = 9
+Nitrogen        = 9
+gimp            = 9

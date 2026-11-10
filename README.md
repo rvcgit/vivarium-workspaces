@@ -17,6 +17,8 @@ Vivarium Workspaces provides nine individual, clickable Waybar modules. Each wor
 - Configurable without editing the script.
 - Installer and uninstaller included.
 - Small Vivarium IPC patch for workspace state reporting.
+- Application workspace allocation using configurable window rules.
+- Each feature can be installed independently, or both can be installed together.
 
 ## How It Works
 
@@ -24,6 +26,7 @@ Vivarium writes workspace information to:
 ```
 /tmp/vivarium-workspaces.txt
 ```
+
 The workspace script reads this file and generates JSON output for each individual Waybar module.
 
 Each module displays one workspace and uses its state to determine the display colour.
@@ -33,12 +36,12 @@ The integration uses a small patch to Vivarium's IPC code to report workspace oc
 ## Requirements
 
 - Linux system running Vivarium.
-- Waybar.
 - Bash.
-- ydotool for clickable workspace switching.
-- A Nerd Font if you want to use workspace icons.
-- Git.
-- Vivarium source code for applying the IPC patch.
+- Git (required by the installer for patch management).
+- Vivarium source code (required for applying the supplied patches).
+- Waybar for workspace presentation.
+- ydotool for click-based workspace switching (workspace presentation only)
+- A Nerd Font (for example, `JetBrainsMono Nerd Font`) if you want to use the workspace icons.
 
 ## Installation
 
@@ -47,52 +50,77 @@ Clone the repository:
 ```bash
 git clone https://github.com/rvcgit/vivarium-workspaces.git
 cd vivarium-workspaces
-```
-
-Make the installer executable and run it:
-
-```bash
 chmod +x install.sh
 ./install.sh
 ```
+The installer offers four choices:
 
-The installer:
+1. Workspace presentation (Waybar + IPC).
+2. Application workspace allocation.
+3. Both features.
+4. Quit without installing anything.
 
-- Installs the workspace script.
-- Installs the default workspace configuration if one does not already exist.
-- Backs up existing workspace files before installation.
-- Preserves an existing workspace configuration.
+**Installation Paths**
 
-Backups are stored in:
+The installer asks for the Vivarium source directory.
 
-```~/.local/share/vivarium-workspaces/backup/
+The default is:
+
+`~/viv_src`
+
+Select the Git working tree containing your Vivarium source code.
+
+When application workspace allocation is selected, the installer also asks for the Vivarium configuration directory.
+
+The default is:
+
+`~/.config/viv_src`
+
+Select the directory containing your active Vivarium configuration. The application rules file, `window_rules.conf`, is installed in this directory.
+
+**Installation Safety**
+
+The installer checks for existing components before making changes.
+
+- Existing workspace scripts and configuration files are preserved.
+- Existing Vivarium patches are detected and left unchanged rather than applied again.
+- Existing application rules are preserved.
+- The installer records ownership of newly installed components in:
+
+  `~/.local/share/vivarium-workspaces/install-state.sh`
+
+The ownership record allows the uninstaller to distinguish components installed by this project from components that were already present.
+
+The installer displays its planned actions and requests confirmation before proceeding.
+
+### Dry Run
+
+Both scripts support a dry-run mode to inspect planned actions without modifying files or applying or reversing patches.
+
+To preview installation:
+
+```bash
+./install.sh --dry-run
 ```
-*Note:* The installer does not modify your Vivarium source, Waybar configuration, CSS, or IPC settings. These steps are performed separately.
 
-## Vivarium IPC Configuration
-
-Open your Vivarium configuration file:
-
-`~/.config/vivarium/config.toml`
-
-Add the following section:
-
-```toml
-[ipc]
-workspaces-filename = "/tmp/vivarium-workspaces.txt"
+To preview uninstallation:
+```bash
+./uninstall.sh --dry-run
 ```
 
-This tells Vivarium where to write workspace information.
+Dry run mode does not make any changes to your existing setup or installation.
 
-## Applying the Vivarium IPC Patch
+## Manual IPC Patch Application (Alternative)
 
-The supplied patch modifies Vivarium's IPC code to report workspace occupancy.
+The unified installer normally handles the Vivarium IPC patch automatically when workspace presentation is selected.
+
+The following instructions are provided for users who prefer to apply the patch manually.
 
 First, enter your Vivarium source directory:
 
 
 ```bash
-cd PATH/TO/vivarium
+cd path/TO/vivarium
 ```
 
 Check whether the patch can be applied:
@@ -111,6 +139,83 @@ Replace `/path/to/` with the actual location of your cloned repository.
 
 **Important:** The patch was prepared against the upstream Vivarium revision `1ffa436`. Other revisions may require adjustments.
 
+## Vivarium IPC Configuration
+
+After applying the IPC patch, configure Vivarium to write workspace information to the IPC file.
+
+Open your active Vivarium configuration file, normally:
+
+`~/.config/vivarium/config.toml`
+
+Add the following section:
+
+```toml
+[ipc]
+workspaces-filename = "/tmp/vivarium-workspaces.txt"
+```
+
+If an `[ipc]` section already exists, add the `workspaces-filename` setting under it rather than creating a duplicate section.
+
+This tells Vivarium where to write workspace information for the Waybar workspace modules.
+
+## Application Workspace Allocation
+
+Vivarium Workspaces includes an independent application workspace allocation feature.
+
+It allows newly opened applications to be assigned automatically to designated workspaces using configurable application identifiers.
+
+This feature does not require Waybar or the workspace presentation feature.
+
+### Configuration
+
+The rules file is:
+
+`window_rules.conf`
+
+It is installed in the same directory as your active Vivarium `config.toml`.
+
+The default location is:
+
+`~/.config/viv_src/window_rules.conf`
+
+A sample configuration is provided at:
+
+`ws_allocate/config/window_rules.conf.example`
+
+### Rule Syntax
+
+Each rule maps an application identifier to a workspace number.
+
+```text
+application_id = workspace_number
+```
+Example:
+```text
+firefox = 1
+Gedit   = 2
+```
+**Identifiers are case-sensitive.**
+
+- Native Wayland applications use their XDG `app_id`.
+- XWayland applications use the second string returned by `xprop WM_CLASS`.
+
+For XWayland applications, the second value returned by `xprop WM_CLASS` is normally the required identifier.
+
+**Behaviour**
+
+- New independent top-level windows are matched against configured rules.
+- Matching applications are assigned to their designated workspaces.
+- The currently active workspace is not automatically changed.
+- Unmatched applications retain normal Vivarium placement behaviour.
+- Child windows and transient dialogs are excluded from application workspae allocation (for example, the welcome popup in GIMP).
+- Explicit fullscreen-output requests take priority.
+- Invalid rules are reported and skipped.
+- Changing rules does not move existing windows.
+
+**For further details, see:**
+
+`ws_allocate/README.md`
+
 ## Waybar Integration
 
 The repository includes:
@@ -124,9 +229,9 @@ Do not replace your entire Waybar configuration.
 
 Each module calls the workspace script with its workspace number (1-9).
 
-The modules use `ydotool` to switch workspaces when clicked.
+The modules use ydotool for click-based workspace switching. Ensure it is installed and configured before using this feature.
 
-Add the supplied CSS rules to your existing Waybar stylesheet to control spacing, padding, and module width.
+Add the supplied CSS rules to your existing Waybar stylesheet. Adjust spacing,padding and module width as needed.
 
 Restart Waybar after making the changes.
 
@@ -165,33 +270,53 @@ You can customize workspace names, icons, labels, and colours in this configurat
 
 The IPC output uses the following markers:
 
-- `<name>` - Active workspace.
-- `name*` - Occupied workspace.
-- `<name>*` - Active and occupied workspace.
-- `name` - Empty workspace.
+- `<number>` - Active workspace.
+- `number*` - Occupied workspace.
+- `<number>*` - Active and occupied workspace.
+- `number` - Empty workspace.
 
-The active workspace takes priority over the occupied state.
+The active workspace takes priority when a workspace is both active and occupied.
 
 ## Uninstallation
 
-To uninstall the integration, enter the repository directory and run:
-
+Run the unified uninstaller from the repository directory:
 ```bash
 ./uninstall.sh
 ```
+**The Uninstaller offers four choices**
 
-The uninstaller restores previously backed-up workspace files when available.
+1. Workspace presentation (Waybar + IPC).
+2. Application workspace allocation.
+3. Both features.
+4. Quit without uninstalling.
 
-If no previous workspace configuration backup exists, the current configuration is preserved.
+**Uninstallation Safety**
 
-The uninstaller does not modify Waybar modules, CSS, or Vivarium IPC settings. Remove these manually if you no longer need them.
+The uninstaller uses the installation ownership record to identify components installed by this project.
+- Only installer-owned files and patches selected for removal are removed.
+- Pre-existing files and patches are preserved.
+- Removing one feature does not remove the other.
+- The installation record is updated when only one feature is removed.
+- The record is removed when all installer-owned components have been uninstalled.
 
-Backups are retained at:
+The uninstaller checks whether owned patches can be safely reversed before proceeding.
 
-`~/.local/share/vivarium-workspaces/backup/`
+It also creates temporary recovery backups during the removal process.
+
+## Dry Run
+
+To inspect planned removal actions without making changes:
+```bash
+./uninstall.sh --dry-run
+```
+
+## After Uninstallation
+
+If a Vivarium source patch was reversed, rebuild and install Vivarium using your normal build procedure, then restart the compositor.
+
+If the workspace presentation was removed, manually remove the corresponding workspace modules and CSS rules from your Waybar configuration if they are no longer needed.
 
 ## Project Structure
-
 ```text
 vivarium-workspaces/
 |-- config/
@@ -200,9 +325,18 @@ vivarium-workspaces/
 |   |-- vivarium-ipc.patch
 |-- scripts/
 |   |-- vivarium-workspace-item.sh
+|-- Screenshots/
+|   |-- vivarium-waybar.png
+|   |-- vivarium-workspace.png
 |-- waybar/
 |   |-- config.example
 |   |-- style.css
+|-- ws_allocate/
+|   |-- config/
+|   |   |-- window_rules.conf.example
+|   |-- patches/
+|   |   |-- application-workspace-rules.patch
+|   |-- README.md
 |-- install.sh
 |-- uninstall.sh
 |-- LICENSE
